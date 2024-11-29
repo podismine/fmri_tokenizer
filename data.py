@@ -13,8 +13,8 @@ warnings.filterwarnings("ignore")
 class Task1Data(data.Dataset):
 
     def __init__(self, is_train=True, is_test = False,shuffle_seed=42):
-        self.root = '/home/yyang/work/fmri_tokenizer/data'
-        df = pd.read_csv(f"{self.root}/use_adhd_df.csv")
+        self.root = '/home/yyang/yang/fmri_tokenizer/data'
+        df = pd.read_csv(f"{self.root}/use_adhd.csv")
         self.aim_len = 64
         if is_train is True:
             use_index = df[df['is_train']==1].index
