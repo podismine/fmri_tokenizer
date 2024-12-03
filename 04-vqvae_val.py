@@ -20,7 +20,7 @@ test_loader = DataLoader(test_dataset, batch_size=32,num_workers=0)
 model = VQVAE(input_dim = 100, hidden_dim = 512, state_num_embeddings = 512, transition_num_embeddings = 16, embedding_dim = 256, commitment_cost = 0.1) # 
 # model = VQVAE(input_dim = 100, hidden_dim = 512, num_embeddings = 512, embedding_dim = 256, commitment_cost = 0.1) # 
 
-checkpoint = torch.load("checkpoint/checkpoint_vqvae_mine/last_model.pth", map_location='cpu')
+checkpoint = torch.load("checkpoint/checkpoint_vqvae_mine_state32/last_model.pth", map_location='cpu')
 model.load_state_dict(checkpoint['model'])
 model.cuda().eval()
 
@@ -30,13 +30,13 @@ def extract_embeddings(dataloader):
     for idx, (x, y) in enumerate(dataloader):
         x = x.cuda().float()#[:,0].permute(0,2,1)
         with torch.no_grad():
-            tokens1, tokens2 = model.forward_token(x)
-            x_stack.extend(tokens2.detach())
+            _,_,tokens1, tokens2 = model.forward_token(x)
+            x_stack.extend(tokens2.detach().reshape(len(x), -1))
             y_stack.extend(y)
     x_stack = torch.stack(x_stack).detach().cpu().numpy()
     y_stack = torch.stack(y_stack).detach().cpu().numpy()
     # x_stack = x_stack.reshape(len(x_stack), -1)
-    x_stack = x_stack.mean(1)
+    x_stack = x_stack.mean(1).reshape(len(x_stack), -1)
     # (863, 64, 256)
     return x_stack, y_stack
 
@@ -45,7 +45,7 @@ x_train, y_train = extract_embeddings(train_loader)
 x_val, y_val = extract_embeddings(val_loader)
 x_test, y_test = extract_embeddings(test_loader)
 
-
+print(x_train.shape, y_train.shape)
 scaler = preprocessing.StandardScaler()
 scaler.fit(x_train)
 

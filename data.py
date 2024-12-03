@@ -30,6 +30,7 @@ class Task1Data(data.Dataset):
 
             test_length = int(0.15 * len(df))
             split2 = StratifiedShuffleSplit(n_splits=1, test_size=test_length, random_state=shuffle_seed)
+
             for valid_index, test_index in split2.split(names, site_data):
                 test_names, test_dx = names[test_index], dx[test_index]
                 val_names, val_dx = names[valid_index], dx[valid_index]
@@ -37,10 +38,12 @@ class Task1Data(data.Dataset):
                 self.names = test_names
                 self.dx = test_dx
                 print(f"Finding Testing files: {len(self.names)}")
+                print(f"0/1: {len(self.names[self.dx==0])}/{len(self.names[self.dx==1])}")
             else:
                 self.names = val_names
                 self.dx = val_dx
                 print(f"Finding Validation files: {len(self.names)}")
+                print(f"0/1: {len(self.names[self.dx==0])}/{len(self.names[self.dx==1])}")
             # TODO: is_test
 
     def pad_or_cut(self,dat):

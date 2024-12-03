@@ -1,6 +1,13 @@
 import torch
 import torch.nn as nn
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+from torch import einsum
+from einops import rearrange
+
 class VectorQuantizer(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, commitment_cost):
         super(VectorQuantizer, self).__init__()
@@ -31,7 +38,6 @@ class VectorQuantizer(nn.Module):
 
         # 保持梯度
         quantized = x + (quantized - x).detach()
-
         return quantized, loss, indices
 
 # 定义 VQ-VAE 模型
