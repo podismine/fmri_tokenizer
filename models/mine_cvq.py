@@ -8,8 +8,7 @@ import numpy as np
 from torch import einsum
 from einops import rearrange
 from mamba_ssm import Mamba
-
-
+    
 class CVQ(nn.Module):
 
     def __init__(self, num_embed, embed_dim, beta, distance='cos', 
@@ -137,23 +136,44 @@ class VectorQuantizer(nn.Module):
 
 # 定义 VQ-VAE 模型
 class VQVAE(nn.Module):
-    def __init__(self, input_dim, hidden_dim, state_num_embeddings, transition_num_embeddings, embedding_dim, commitment_cost,model = 'gru'):
+    def __init__(self, input_dim, hidden_dim, state_num_embeddings, transition_num_embeddings,layer, embedding_dim, commitment_cost,model = 'gru'):
         super(VQVAE, self).__init__()
         self.model = model
         if self.model not in ['gru','lstm','rnn','mamba']:
             raise KeyError(f'{self.model} not in list')
         
         self.embedding_dim = embedding_dim
-        transformer_encoders = nn.TransformerEncoderLayer(d_model=input_dim, nhead=2, dim_feedforward=hidden_dim, batch_first=True)
-        self.state_encoder = nn.TransformerEncoder(transformer_encoders,num_layers=2,norm=nn.LayerNorm(input_dim))
-        if self.model == 'gru':
-            self.transition_encoder = nn.GRU(input_dim, hidden_dim, num_layers=2, batch_first=True)
+        spatial_transformer_encoders = nn.TransformerEncoderLayer(d_model=input_dim, nhead=4, dim_feedforward=hidden_dim, batch_first=True)
+        temporal_transformer_encoders = nn.TransformerEncoderLayer(d_model=64, nhead=4, dim_feedforward=hidden_dim, batch_first=True)
+
+        self.state_spatial_encoder = nn.TransformerEncoder(spatial_transformer_encoders,num_layers=2,norm=nn.LayerNorm(input_dim))
+        self.state_temporal_encoder = nn.TransformerEncoder(temporal_transformer_encoders,num_layers=2,norm=nn.LayerNorm(64))
+
+        self.spatial_attn = nn.Sequential(
+            nn.Linear(64, 8),
+            nn.ReLU(inplace=True),
+            nn.Linear(8, 64),
+            nn.Sigmoid()
+        )
+
+        self.temporal_attn = nn.Sequential(
+            nn.Linear(100, 8),
+            nn.ReLU(inplace=True),
+            nn.Linear(8, 100),
+            nn.Sigmoid()
+        )
+
+        if self.model == 'rnn':
+            self.transition_encoder = nn.RNN(input_dim, hidden_dim, num_layers=layer, batch_first=True)
+            self.transition_fc_encoder = nn.Linear(hidden_dim, embedding_dim)  # 双向 GRU 输出拼接
+        elif self.model == 'gru':
+            self.transition_encoder = nn.GRU(input_dim, hidden_dim, num_layers=layer, batch_first=True)
             self.transition_fc_encoder = nn.Linear(hidden_dim, embedding_dim)  # 双向 GRU 输出拼接
         elif self.model == 'lstm':
-            self.transition_encoder = nn.LSTM(input_dim, hidden_dim, num_layers=2, batch_first=True)
+            self.transition_encoder = nn.LSTM(input_dim, hidden_dim, num_layers=layer, batch_first=True)
             self.transition_fc_encoder = nn.Linear(hidden_dim, embedding_dim)  # 双向 GRU 输出拼接
         elif self.model == 'mamba':
-            self.transition_encoder = Mamba(d_model=input_dim, d_state=4, d_conv=3, expand=2)
+            self.transition_encoder = Mamba(d_model=input_dim, d_state=4, d_conv=3, expand=layer)
             self.transition_fc_encoder = nn.Linear(input_dim, embedding_dim)  # 双向 GRU 输出拼接
         self.state_proj = nn.Linear(input_dim, hidden_dim)
 
@@ -168,35 +188,49 @@ class VQVAE(nn.Module):
         self.state_fc_decoder = nn.Linear(embedding_dim, hidden_dim)
         self.transition_fc_decoder = nn.Linear(embedding_dim, hidden_dim)
 
-        transformer_decoders = nn.TransformerEncoderLayer(d_model=hidden_dim * 2, nhead=2, dim_feedforward=hidden_dim * 2, batch_first=True)
+        transformer_decoders = nn.TransformerEncoderLayer(d_model=hidden_dim * 2, nhead=4, dim_feedforward=hidden_dim * 2, batch_first=True)
         self.decoder = nn.TransformerEncoder(transformer_decoders,num_layers=2,norm=nn.LayerNorm(hidden_dim * 2))
         self.predict = nn.Linear(hidden_dim * 2, input_dim)
     def forward_token(self,x):
-        x = self.state_encoder(x)
+
+        temporal_x = self.state_spatial_encoder(x) # N, 64, 100
+        spatial_x = self.state_temporal_encoder(x.permute(0,2,1)) # N, 100, 64
+
+        temporal_attn = self.spatial_attn(temporal_x.mean(-1))[:,None] # N, 1, 64
+        spatial_attn = self.temporal_attn(spatial_x.mean(-1))[:,None] # N, 1, 100
+        print(temporal_x.shape,spatial_attn.shape,spatial_x.shape,temporal_attn.shape,x.shape);exit()
+        spa_tem_out = temporal_x * spatial_attn + spatial_x * temporal_attn + x
+
         if self.model == 'mamba':
-            transitions = self.transition_encoder(x)
+            transitions = self.transition_encoder(spa_tem_out)
         else:
-            transitions, hn = self.transition_encoder(x)
-        states = self.state_proj(x)
+            transitions, hn = self.transition_encoder(spa_tem_out)
+        states = self.state_proj(spa_tem_out)
 
         states = self.state_fc_encoder(states)
         transitions = self.transition_fc_encoder(transitions)
 
-        # gru_out = gru_out.permute(0, 2, 1).contiguous()  # 转为 (batch, embedding_dim, time)
-        # print("before quantizer:", states.shape, transitions.shape) # torch.Size([256, 64, 512]) torch.Size([256, 64, 512])
-        # print(self.embedding_dim);exit()
         quantized_state, loss_state, token_state = self.state_quantizer(states)
         quantized_transition, loss_transition, token_transition = self.transition_quantizer(transitions)
         return quantized_state, quantized_transition, token_state, token_transition
+    
     def forward(self, x):
 
-        x = self.state_encoder(x)
+        temporal_x = self.state_spatial_encoder(x) # N, 64, 100
+        spatial_x = self.state_temporal_encoder(x.permute(0,2,1)) # N, 100, 64
+
+        temporal_attn = self.spatial_attn(temporal_x.mean(-1))[:,None] # N, 1, 64
+        spatial_attn = self.temporal_attn(spatial_x.mean(-1))[:,None] # N, 1, 100
+
+        # print(temporal_x.shape,spatial_attn.shape,spatial_x.shape,temporal_attn.shape,x.shape);exit()
+        spa_tem_out = temporal_x * spatial_attn + (spatial_x * temporal_attn).permute(0,2,1) + x
+
         # transitions, hn = self.transition_encoder(x)
         if self.model == 'mamba':
-            transitions = self.transition_encoder(x)
+            transitions = self.transition_encoder(spa_tem_out)
         else:
-            transitions, hn = self.transition_encoder(x)
-        states = self.state_proj(x)
+            transitions, hn = self.transition_encoder(spa_tem_out)
+        states = self.state_proj(spa_tem_out)
 
         states = self.state_fc_encoder(states)
         transitions = self.transition_fc_encoder(transitions)
